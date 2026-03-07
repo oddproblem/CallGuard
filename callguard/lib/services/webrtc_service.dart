@@ -1,57 +1,53 @@
 import 'dart:convert';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:http/http.dart' as http;
+import '../config/constants.dart';
 
+/// Manages the WebRTC peer connection lifecycle.
+///
+/// Responsibilities:
+/// - Peer connection creation with ICE servers
+/// - Local media stream (audio)
+/// - Offer/answer/ICE candidate exchange
+/// - Resource cleanup
 class WebRTCService {
   RTCPeerConnection? peerConnection;
   MediaStream? localStream;
   MediaStream? remoteStream;
 
+  // ── Callbacks ──
   Function(RTCIceCandidate)? onIceCandidate;
   Function(MediaStream)? onRemoteStream;
   Function(RTCIceConnectionState)? onIceConnectionState;
 
-  // Fallback ICE config (STUN only)
-  static final Map<String, dynamic> _fallbackConfig = {
-    'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
-    ],
-  };
-
-  /// Fetch TURN credentials from the signaling server
-  static Future<Map<String, dynamic>> fetchIceConfig(String serverUrl) async {
+  /// Fetch TURN/STUN credentials from the signaling server.
+  static Future<Map<String, dynamic>> fetchIceConfig() async {
     try {
       final response = await http
-          .get(Uri.parse('$serverUrl/turn-credentials'))
+          .get(Uri.parse('${AppConfig.serverUrl}/turn-credentials'))
           .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        print('Fetched TURN credentials: ${data['iceServers'].length} servers');
-        return data;
+        return json.decode(response.body) as Map<String, dynamic>;
       }
     } catch (e) {
-      print('Failed to fetch TURN credentials: $e');
+      // Fall through to fallback
     }
-    return _fallbackConfig;
+    return AppConfig.fallbackIceConfig;
   }
 
+  /// Initialize: acquire mic → create peer connection → attach tracks.
   Future<void> initialize(Map<String, dynamic> iceConfig) async {
-    // Step 1: Get local audio stream
     localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
       'video': false,
     });
 
-    // Step 2: Create peer connection with TURN servers
     peerConnection = await createPeerConnection(iceConfig);
 
-    // Step 3: Add local audio tracks
-    localStream!.getAudioTracks().forEach((track) {
+    for (final track in localStream!.getAudioTracks()) {
       peerConnection!.addTrack(track, localStream!);
-    });
+    }
 
-    // Step 4: Set up callbacks
     peerConnection!.onTrack = (RTCTrackEvent event) {
       if (event.streams.isNotEmpty) {
         remoteStream = event.streams[0];
@@ -59,16 +55,16 @@ class WebRTCService {
       }
     };
 
-    peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
+    peerConnection!.onIceCandidate = (candidate) {
       onIceCandidate?.call(candidate);
     };
 
-    peerConnection!.onIceConnectionState = (RTCIceConnectionState state) {
-      print('ICE Connection State: $state');
+    peerConnection!.onIceConnectionState = (state) {
       onIceConnectionState?.call(state);
     };
   }
 
+  /// Create an SDP offer (caller side).
   Future<RTCSessionDescription> createOffer() async {
     final offer = await peerConnection!.createOffer({
       'offerToReceiveAudio': true,
@@ -78,6 +74,7 @@ class WebRTCService {
     return offer;
   }
 
+  /// Create an SDP answer (callee side).
   Future<RTCSessionDescription> createAnswer() async {
     final answer = await peerConnection!.createAnswer({
       'offerToReceiveAudio': true,
@@ -95,6 +92,7 @@ class WebRTCService {
     await peerConnection!.addCandidate(candidate);
   }
 
+  /// Release all WebRTC resources.
   Future<void> dispose() async {
     try {
       localStream?.getTracks().forEach((track) => track.stop());
@@ -104,7 +102,7 @@ class WebRTCService {
       peerConnection = null;
       remoteStream = null;
     } catch (e) {
-      print('WebRTC dispose error: $e');
+      // Swallow — disposal errors are non-critical
     }
   }
 }
