@@ -19,7 +19,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   bool _isConnected = false;
 
   // ── Change this to your server IP ──
-  static const String _serverUrl = 'http://192.168.1.39:3000';
+  static const String _serverUrl = 'https://callguard-server-pw4i.onrender.com';
 
   late AnimationController _pulseController;
 
