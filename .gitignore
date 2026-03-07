@@ -1,0 +1,22 @@
+# Flutter/Dart
+callguard/build/
+callguard/.dart_tool/
+callguard/.packages
+callguard/.pub/
+callguard/.flutter-plugins
+callguard/.flutter-plugins-dependencies
+callguard/android/.gradle/
+callguard/android/build/
+callguard/android/app/build/
+
+# Node.js
+callguard-server/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
