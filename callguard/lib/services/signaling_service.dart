@@ -2,12 +2,16 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class SignalingService {
   late IO.Socket socket;
+  bool isConnected = false;
 
   Function(dynamic)? onIncomingCall;
   Function(dynamic)? onCallAnswered;
   Function(dynamic)? onIceCandidate;
   Function(dynamic)? onCallRejected;
   Function(dynamic)? onCallEnded;
+  Function(dynamic)? onUserOffline;
+  Function()? onConnected;
+  Function()? onDisconnected;
 
   void connect(String serverUrl, String userId) {
     socket = IO.io(
@@ -15,6 +19,9 @@ class SignalingService {
       IO.OptionBuilder()
           .setTransports(['websocket'])
           .disableAutoConnect()
+          .enableReconnection()
+          .setReconnectionDelay(1000)
+          .setReconnectionAttempts(10)
           .build(),
     );
 
@@ -22,31 +29,46 @@ class SignalingService {
 
     socket.onConnect((_) {
       print('Connected to signaling server');
+      isConnected = true;
       socket.emit('register', userId);
+      onConnected?.call();
     });
 
     socket.on('incoming-call', (data) {
-      if (onIncomingCall != null) onIncomingCall!(data);
+      onIncomingCall?.call(data);
     });
 
     socket.on('call-answered', (data) {
-      if (onCallAnswered != null) onCallAnswered!(data);
+      onCallAnswered?.call(data);
     });
 
     socket.on('ice-candidate', (data) {
-      if (onIceCandidate != null) onIceCandidate!(data);
+      onIceCandidate?.call(data);
     });
 
     socket.on('call-rejected', (data) {
-      if (onCallRejected != null) onCallRejected!(data);
+      onCallRejected?.call(data);
     });
 
     socket.on('call-ended', (data) {
-      if (onCallEnded != null) onCallEnded!(data);
+      onCallEnded?.call(data);
+    });
+
+    socket.on('user-offline', (data) {
+      onUserOffline?.call(data);
     });
 
     socket.onDisconnect((_) {
       print('Disconnected from signaling server');
+      isConnected = false;
+      onDisconnected?.call();
+    });
+
+    socket.onReconnect((_) {
+      print('Reconnected to signaling server');
+      isConnected = true;
+      socket.emit('register', userId);
+      onConnected?.call();
     });
   }
 

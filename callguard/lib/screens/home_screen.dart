@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../utils/id_generator.dart';
 import '../services/signaling_service.dart';
@@ -44,6 +45,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   void _connectToServer(String userId) {
     _signaling.connect(_serverUrl, userId);
 
+    _signaling.onConnected = () {
+      if (mounted) setState(() => _isConnected = true);
+    };
+
+    _signaling.onDisconnected = () {
+      if (mounted) setState(() => _isConnected = false);
+    };
+
     _signaling.onIncomingCall = (data) {
       _showIncomingCallDialog(data);
     };
@@ -58,18 +67,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         );
       }
     };
-
-    // A small delay to check connection state
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        setState(() => _isConnected = true);
-      }
-    });
   }
 
   void _showIncomingCallDialog(dynamic data) {
     final callerId = data['from'] ?? 'Unknown';
     final sdpOffer = data['offer'];
+
+    // Play ringtone for incoming call
+    FlutterRingtonePlayer().play(
+      android: AndroidSounds.ringtone,
+      ios: IosSounds.electronic,
+      looping: true,
+      volume: 1.0,
+    );
 
     showDialog(
       context: context,
@@ -84,26 +94,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Text('Incoming Call', style: TextStyle(color: Colors.white)),
           ],
         ),
-        content: Text(
-          'CallGuard ID: $callerId is calling you',
-          style: const TextStyle(color: Colors.white70, fontSize: 16),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              callerId,
+              style: const TextStyle(
+                color: Color(0xFF00D2FF),
+                fontSize: 32,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 4,
+                fontFamily: 'monospace',
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'is calling you',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+          ],
         ),
+        actionsAlignment: MainAxisAlignment.spaceEvenly,
         actions: [
           TextButton.icon(
             onPressed: () {
+              FlutterRingtonePlayer().stop();
               Navigator.of(ctx).pop();
               _signaling.rejectCall({'to': callerId});
             },
-            icon: const Icon(Icons.call_end, color: Colors.redAccent),
+            icon: const Icon(Icons.call_end, color: Colors.redAccent, size: 28),
             label: const Text('Reject', style: TextStyle(color: Colors.redAccent)),
           ),
           ElevatedButton.icon(
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF00D2FF),
+              backgroundColor: Colors.greenAccent,
               foregroundColor: Colors.black,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             ),
             onPressed: () {
+              FlutterRingtonePlayer().stop();
               Navigator.of(ctx).pop();
               _acceptCall(callerId, sdpOffer);
             },
@@ -125,6 +154,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           remoteId: callerId,
           isIncoming: true,
           sdpOffer: sdpOffer,
+          serverUrl: _serverUrl,
         ),
       ),
     );
@@ -151,7 +181,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return;
     }
 
-    // Request microphone permission using permission_handler (no getUserMedia here)
+    if (!_isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Not connected to server. Please wait...'),
+          backgroundColor: Colors.orangeAccent,
+        ),
+      );
+      return;
+    }
+
+    // Request microphone permission
     final status = await Permission.microphone.request();
     if (!status.isGranted) {
       if (mounted) {
@@ -175,6 +215,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           userId: _userId,
           remoteId: targetId,
           isIncoming: false,
+          serverUrl: _serverUrl,
         ),
       ),
     );

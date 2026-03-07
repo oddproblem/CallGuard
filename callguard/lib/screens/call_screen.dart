@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/signaling_service.dart';
 import '../services/webrtc_service.dart';
@@ -10,6 +11,7 @@ class CallScreen extends StatefulWidget {
   final String remoteId;
   final bool isIncoming;
   final dynamic sdpOffer;
+  final String serverUrl;
 
   const CallScreen({
     super.key,
@@ -17,6 +19,7 @@ class CallScreen extends StatefulWidget {
     required this.userId,
     required this.remoteId,
     required this.isIncoming,
+    required this.serverUrl,
     this.sdpOffer,
   });
 
@@ -29,7 +32,9 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
   String _callStatus = 'Connecting...';
   bool _isMuted = false;
   bool _isSpeaker = false;
+  bool _callEnded = false;
   Timer? _callTimer;
+  Timer? _ringTimeout;
   int _seconds = 0;
   late AnimationController _ringController;
 
@@ -44,14 +49,18 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _setupCall() async {
+    // Fetch TURN credentials from signaling server
+    final iceConfig = await WebRTCService.fetchIceConfig(widget.serverUrl);
+
     try {
-      await _webrtc.initialize();
+      await _webrtc.initialize(iceConfig);
     } catch (e) {
       print('WebRTC init error: $e');
       if (mounted) {
         setState(() => _callStatus = 'Microphone Error');
+        _stopRingtone();
         await Future.delayed(const Duration(seconds: 2));
-        if (mounted) Navigator.pop(context);
+        if (mounted) _navigateBack();
       }
       return;
     }
@@ -69,9 +78,27 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
     };
 
     _webrtc.onRemoteStream = (stream) {
-      if (mounted) {
+      if (mounted && !_callEnded) {
+        _stopRingtone();
         setState(() => _callStatus = 'Connected');
         _startTimer();
+      }
+    };
+
+    // Monitor ICE connection state for failures
+    _webrtc.onIceConnectionState = (state) {
+      if (_callEnded) return;
+      if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        _handleCallFailed('Connection Failed');
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        if (mounted) setState(() => _callStatus = 'Reconnecting...');
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+                 state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+        _stopRingtone();
+        if (mounted && _callStatus != 'Connected') {
+          setState(() => _callStatus = 'Connected');
+          _startTimer();
+        }
       }
     };
 
@@ -94,7 +121,12 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
 
     // Handle call ended by remote
     widget.signaling.onCallEnded = (data) {
-      _endCall(showSnackbar: false);
+      if (!_callEnded) _endCall(showMessage: 'Call Ended');
+    };
+
+    // Handle user offline
+    widget.signaling.onUserOffline = (data) {
+      if (!_callEnded) _handleCallFailed('User Offline');
     };
 
     try {
@@ -110,8 +142,10 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
           'answer': {'sdp': answer.sdp, 'type': answer.type},
         });
       } else {
-        // Outgoing call: create offer and send
+        // Outgoing call: play ringtone and create offer
         if (mounted) setState(() => _callStatus = 'Ringing...');
+        _playRingtone();
+
         final offer = await _webrtc.createOffer();
         widget.signaling.callUser({
           'from': widget.userId,
@@ -119,45 +153,75 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
           'offer': {'sdp': offer.sdp, 'type': offer.type},
         });
 
+        // Timeout: ring for 45 seconds max
+        _ringTimeout = Timer(const Duration(seconds: 45), () {
+          if (_callStatus == 'Ringing...' && !_callEnded) {
+            _handleCallFailed('No Answer');
+          }
+        });
+
         // Listen for answer
         widget.signaling.onCallAnswered = (data) async {
+          _ringTimeout?.cancel();
+          _stopRingtone();
           try {
             if (data['answer'] != null) {
               await _webrtc.setRemoteDescription(
                 RTCSessionDescription(data['answer']['sdp'], data['answer']['type']),
               );
-              if (mounted) {
+              if (mounted && !_callEnded) {
                 setState(() => _callStatus = 'Connected');
                 _startTimer();
               }
             }
           } catch (e) {
             print('Answer handling error: $e');
+            _handleCallFailed('Connection Error');
           }
         };
 
         // Listen for rejection
         widget.signaling.onCallRejected = (data) {
-          if (mounted) {
-            setState(() => _callStatus = 'Call Rejected');
-            Future.delayed(const Duration(seconds: 1), () {
-              if (mounted) Navigator.pop(context);
-            });
-          }
+          if (!_callEnded) _handleCallFailed('Call Rejected');
         };
       }
     } catch (e) {
       print('Call setup error: $e');
-      if (mounted) {
-        setState(() => _callStatus = 'Call Failed');
-        await Future.delayed(const Duration(seconds: 2));
-        if (mounted) Navigator.pop(context);
-      }
+      _handleCallFailed('Call Failed');
     }
+  }
+
+  void _handleCallFailed(String reason) {
+    if (_callEnded) return;
+    _callEnded = true;
+    _stopRingtone();
+    _ringTimeout?.cancel();
+    _callTimer?.cancel();
+    if (mounted) {
+      setState(() => _callStatus = reason);
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) _navigateBack();
+      });
+    }
+  }
+
+  void _playRingtone() {
+    FlutterRingtonePlayer().play(
+      android: AndroidSounds.ringtone,
+      ios: IosSounds.electronic,
+      looping: true,
+      volume: 0.5,
+    );
+  }
+
+  void _stopRingtone() {
+    FlutterRingtonePlayer().stop();
   }
 
   void _startTimer() {
     _ringController.stop();
+    _ringTimeout?.cancel();
+    _callTimer?.cancel();
     _callTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() => _seconds++);
@@ -187,15 +251,27 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
     }
   }
 
-  void _endCall({bool showSnackbar = true}) async {
+  void _endCall({String? showMessage}) async {
+    if (_callEnded) return;
+    _callEnded = true;
+    _stopRingtone();
     _callTimer?.cancel();
+    _ringTimeout?.cancel();
     try {
       widget.signaling.endCall({'to': widget.remoteId});
       await _webrtc.dispose();
     } catch (e) {
       print('End call error: $e');
     }
-    if (mounted) {
+    if (showMessage != null && mounted) {
+      setState(() => _callStatus = showMessage);
+      await Future.delayed(const Duration(seconds: 1));
+    }
+    if (mounted) _navigateBack();
+  }
+
+  void _navigateBack() {
+    if (mounted && Navigator.canPop(context)) {
       Navigator.pop(context);
     }
   }
@@ -203,7 +279,9 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
   @override
   void dispose() {
     _callTimer?.cancel();
+    _ringTimeout?.cancel();
     _ringController.dispose();
+    _stopRingtone();
     _webrtc.dispose();
     super.dispose();
   }
@@ -211,6 +289,18 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
   @override
   Widget build(BuildContext context) {
     final isConnected = _callStatus == 'Connected';
+    final isFailed = _callStatus == 'Call Rejected' ||
+        _callStatus == 'User Offline' ||
+        _callStatus == 'No Answer' ||
+        _callStatus == 'Connection Failed' ||
+        _callStatus == 'Call Failed' ||
+        _callStatus == 'Connection Error' ||
+        _callStatus == 'Microphone Error' ||
+        _callStatus == 'Call Ended';
+
+    Color statusColor = Colors.orangeAccent;
+    if (isConnected) statusColor = Colors.greenAccent;
+    if (isFailed) statusColor = Colors.redAccent;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A1A),
@@ -231,21 +321,28 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
                     height: 120,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: const LinearGradient(
+                      gradient: LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
-                        colors: [Color(0xFF00D2FF), Color(0xFF7B2FFF)],
+                        colors: isFailed
+                            ? [Colors.redAccent, Colors.red.shade900]
+                            : [const Color(0xFF00D2FF), const Color(0xFF7B2FFF)],
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFF00D2FF).withOpacity(isConnected ? 0.3 : 0.5),
+                          color: (isFailed ? Colors.redAccent : const Color(0xFF00D2FF))
+                              .withOpacity(isConnected ? 0.3 : 0.5),
                           blurRadius: isConnected ? 20 : 30,
                           spreadRadius: isConnected ? 2 : 5,
                         ),
                       ],
                     ),
-                    child: const Center(
-                      child: Icon(Icons.person, color: Colors.white, size: 60),
+                    child: Center(
+                      child: Icon(
+                        isFailed ? Icons.call_end : Icons.person,
+                        color: Colors.white,
+                        size: 60,
+                      ),
                     ),
                   ),
                 );
@@ -281,15 +378,13 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
               decoration: BoxDecoration(
-                color: isConnected
-                    ? Colors.greenAccent.withOpacity(0.1)
-                    : Colors.orangeAccent.withOpacity(0.1),
+                color: statusColor.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
                 isConnected ? _formatDuration(_seconds) : _callStatus,
                 style: TextStyle(
-                  color: isConnected ? Colors.greenAccent : Colors.orangeAccent,
+                  color: statusColor,
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
                   letterSpacing: isConnected ? 4 : 1,
@@ -322,38 +417,40 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
                 ),
               ),
 
-            const SizedBox(height: 40),
+            if (!isFailed) ...[
+              const SizedBox(height: 40),
 
-            // ── End call button ──
-            GestureDetector(
-              onTap: _endCall,
-              child: Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  color: Colors.redAccent,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.redAccent.withOpacity(0.4),
-                      blurRadius: 20,
-                      spreadRadius: 3,
-                    ),
-                  ],
-                ),
-                child: const Center(
-                  child: Icon(Icons.call_end, color: Colors.white, size: 32),
+              // ── End call button ──
+              GestureDetector(
+                onTap: () => _endCall(),
+                child: Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    color: Colors.redAccent,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.redAccent.withOpacity(0.4),
+                        blurRadius: 20,
+                        spreadRadius: 3,
+                      ),
+                    ],
+                  ),
+                  child: const Center(
+                    child: Icon(Icons.call_end, color: Colors.white, size: 32),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'End Call',
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.5),
-                fontSize: 13,
+              const SizedBox(height: 12),
+              Text(
+                'End Call',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.5),
+                  fontSize: 13,
+                ),
               ),
-            ),
+            ],
 
             const Spacer(),
           ],
