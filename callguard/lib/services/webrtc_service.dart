@@ -8,38 +8,36 @@ class WebRTCService {
   Function(RTCIceCandidate)? onIceCandidate;
   Function(MediaStream)? onRemoteStream;
 
-  final Map<String, dynamic> _configuration = {
-    'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
-    ]
-  };
-
   Future<void> initialize() async {
-    peerConnection = await createPeerConnection(_configuration);
-
-    // Capture local audio
+    // Step 1: Get local audio stream
     localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
       'video': false,
     });
 
-    // Add local tracks to the peer connection
-    for (var track in localStream!.getTracks()) {
-      await peerConnection!.addTrack(track, localStream!);
-    }
+    // Step 2: Create peer connection with minimal config
+    // Using only a single STUN server to minimize network thread work
+    peerConnection = await createPeerConnection({
+      'iceServers': [
+        {'urls': 'stun:stun.l.google.com:19302'},
+      ],
+    });
 
-    // Listen for remote tracks
+    // Step 3: Add local audio tracks to the peer connection
+    localStream!.getAudioTracks().forEach((track) {
+      peerConnection!.addTrack(track, localStream!);
+    });
+
+    // Step 4: Set up callbacks
     peerConnection!.onTrack = (RTCTrackEvent event) {
       if (event.streams.isNotEmpty) {
         remoteStream = event.streams[0];
-        if (onRemoteStream != null) onRemoteStream!(remoteStream!);
+        onRemoteStream?.call(remoteStream!);
       }
     };
 
-    // Listen for ICE candidates
     peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
-      if (onIceCandidate != null) onIceCandidate!(candidate);
+      onIceCandidate?.call(candidate);
     };
 
     peerConnection!.onIceConnectionState = (RTCIceConnectionState state) {
@@ -48,13 +46,19 @@ class WebRTCService {
   }
 
   Future<RTCSessionDescription> createOffer() async {
-    RTCSessionDescription offer = await peerConnection!.createOffer();
+    final offer = await peerConnection!.createOffer({
+      'offerToReceiveAudio': true,
+      'offerToReceiveVideo': false,
+    });
     await peerConnection!.setLocalDescription(offer);
     return offer;
   }
 
   Future<RTCSessionDescription> createAnswer() async {
-    RTCSessionDescription answer = await peerConnection!.createAnswer();
+    final answer = await peerConnection!.createAnswer({
+      'offerToReceiveAudio': true,
+      'offerToReceiveVideo': false,
+    });
     await peerConnection!.setLocalDescription(answer);
     return answer;
   }
@@ -68,11 +72,15 @@ class WebRTCService {
   }
 
   Future<void> dispose() async {
-    localStream?.getTracks().forEach((track) => track.stop());
-    await localStream?.dispose();
-    await peerConnection?.close();
-    peerConnection = null;
-    localStream = null;
-    remoteStream = null;
+    try {
+      localStream?.getTracks().forEach((track) => track.stop());
+      await localStream?.dispose();
+      localStream = null;
+      await peerConnection?.close();
+      peerConnection = null;
+      remoteStream = null;
+    } catch (e) {
+      print('WebRTC dispose error: $e');
+    }
   }
 }

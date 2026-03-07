@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../utils/id_generator.dart';
 import '../services/signaling_service.dart';
 import 'call_screen.dart';
@@ -18,7 +18,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final SignalingService _signaling = SignalingService();
   bool _isConnected = false;
 
-  // ── Change this to your server IP ──
+  // ── Render-hosted signaling server ──
   static const String _serverUrl = 'https://callguard-server-pw4i.onrender.com';
 
   late AnimationController _pulseController;
@@ -151,13 +151,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return;
     }
 
-    // Request microphone permission before starting the call
-    try {
-      final stream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
-      // Permission granted — dispose the test stream immediately
-      stream.getTracks().forEach((track) => track.stop());
-      await stream.dispose();
-    } catch (e) {
+    // Request microphone permission using permission_handler (no getUserMedia here)
+    final status = await Permission.microphone.request();
+    if (!status.isGranted) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
