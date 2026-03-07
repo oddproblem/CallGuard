@@ -44,7 +44,17 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _setupCall() async {
-    await _webrtc.initialize();
+    try {
+      await _webrtc.initialize();
+    } catch (e) {
+      print('WebRTC init error: $e');
+      if (mounted) {
+        setState(() => _callStatus = 'Microphone Error');
+        await Future.delayed(const Duration(seconds: 2));
+        if (mounted) Navigator.pop(context);
+      }
+      return;
+    }
 
     // Send ICE candidates to the other peer
     _webrtc.onIceCandidate = (candidate) {
@@ -59,20 +69,26 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
     };
 
     _webrtc.onRemoteStream = (stream) {
-      setState(() => _callStatus = 'Connected');
-      _startTimer();
+      if (mounted) {
+        setState(() => _callStatus = 'Connected');
+        _startTimer();
+      }
     };
 
     // Handle incoming ICE candidates
     widget.signaling.onIceCandidate = (data) {
-      if (data['candidate'] != null) {
-        _webrtc.addIceCandidate(
-          RTCIceCandidate(
-            data['candidate']['candidate'],
-            data['candidate']['sdpMid'],
-            data['candidate']['sdpMLineIndex'],
-          ),
-        );
+      try {
+        if (data['candidate'] != null) {
+          _webrtc.addIceCandidate(
+            RTCIceCandidate(
+              data['candidate']['candidate'],
+              data['candidate']['sdpMid'],
+              data['candidate']['sdpMLineIndex'],
+            ),
+          );
+        }
+      } catch (e) {
+        print('ICE candidate error: $e');
       }
     };
 
@@ -81,47 +97,62 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
       _endCall(showSnackbar: false);
     };
 
-    if (widget.isIncoming) {
-      // Incoming call: set remote offer, create answer
-      setState(() => _callStatus = 'Answering...');
-      await _webrtc.setRemoteDescription(
-        RTCSessionDescription(widget.sdpOffer['sdp'], widget.sdpOffer['type']),
-      );
-      final answer = await _webrtc.createAnswer();
-      widget.signaling.answerCall({
-        'to': widget.remoteId,
-        'answer': {'sdp': answer.sdp, 'type': answer.type},
-      });
-    } else {
-      // Outgoing call: create offer and send
-      setState(() => _callStatus = 'Ringing...');
-      final offer = await _webrtc.createOffer();
-      widget.signaling.callUser({
-        'from': widget.userId,
-        'target': widget.remoteId,
-        'offer': {'sdp': offer.sdp, 'type': offer.type},
-      });
+    try {
+      if (widget.isIncoming) {
+        // Incoming call: set remote offer, create answer
+        if (mounted) setState(() => _callStatus = 'Answering...');
+        await _webrtc.setRemoteDescription(
+          RTCSessionDescription(widget.sdpOffer['sdp'], widget.sdpOffer['type']),
+        );
+        final answer = await _webrtc.createAnswer();
+        widget.signaling.answerCall({
+          'to': widget.remoteId,
+          'answer': {'sdp': answer.sdp, 'type': answer.type},
+        });
+      } else {
+        // Outgoing call: create offer and send
+        if (mounted) setState(() => _callStatus = 'Ringing...');
+        final offer = await _webrtc.createOffer();
+        widget.signaling.callUser({
+          'from': widget.userId,
+          'target': widget.remoteId,
+          'offer': {'sdp': offer.sdp, 'type': offer.type},
+        });
 
-      // Listen for answer
-      widget.signaling.onCallAnswered = (data) async {
-        if (data['answer'] != null) {
-          await _webrtc.setRemoteDescription(
-            RTCSessionDescription(data['answer']['sdp'], data['answer']['type']),
-          );
-          setState(() => _callStatus = 'Connected');
-          _startTimer();
-        }
-      };
+        // Listen for answer
+        widget.signaling.onCallAnswered = (data) async {
+          try {
+            if (data['answer'] != null) {
+              await _webrtc.setRemoteDescription(
+                RTCSessionDescription(data['answer']['sdp'], data['answer']['type']),
+              );
+              if (mounted) {
+                setState(() => _callStatus = 'Connected');
+                _startTimer();
+              }
+            }
+          } catch (e) {
+            print('Answer handling error: $e');
+          }
+        };
 
-      // Listen for rejection
-      widget.signaling.onCallRejected = (data) {
-        if (mounted) {
-          setState(() => _callStatus = 'Call Rejected');
-          Future.delayed(const Duration(seconds: 1), () {
-            if (mounted) Navigator.pop(context);
-          });
-        }
-      };
+        // Listen for rejection
+        widget.signaling.onCallRejected = (data) {
+          if (mounted) {
+            setState(() => _callStatus = 'Call Rejected');
+            Future.delayed(const Duration(seconds: 1), () {
+              if (mounted) Navigator.pop(context);
+            });
+          }
+        };
+      }
+    } catch (e) {
+      print('Call setup error: $e');
+      if (mounted) {
+        setState(() => _callStatus = 'Call Failed');
+        await Future.delayed(const Duration(seconds: 2));
+        if (mounted) Navigator.pop(context);
+      }
     }
   }
 
@@ -147,17 +178,23 @@ class _CallScreenState extends State<CallScreen> with SingleTickerProviderStateM
     });
   }
 
-  void _toggleSpeaker() {
+  void _toggleSpeaker() async {
     setState(() => _isSpeaker = !_isSpeaker);
-    _webrtc.localStream?.getAudioTracks().forEach((track) {
-      track.enableSpeakerphone(_isSpeaker);
-    });
+    try {
+      await Helper.setSpeakerphoneOn(_isSpeaker);
+    } catch (e) {
+      print('Speaker toggle error: $e');
+    }
   }
 
   void _endCall({bool showSnackbar = true}) async {
     _callTimer?.cancel();
-    widget.signaling.endCall({'to': widget.remoteId});
-    await _webrtc.dispose();
+    try {
+      widget.signaling.endCall({'to': widget.remoteId});
+      await _webrtc.dispose();
+    } catch (e) {
+      print('End call error: $e');
+    }
     if (mounted) {
       Navigator.pop(context);
     }

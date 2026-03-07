@@ -12,6 +12,11 @@ const io = new Server(server, {
 // Map CallGuard IDs → socket IDs
 const users = {};
 
+// Health check endpoint (Render needs this)
+app.get("/", (req, res) => {
+  res.json({ status: "ok", users: Object.keys(users).length });
+});
+
 io.on("connection", (socket) => {
   console.log(`[+] Socket connected: ${socket.id}`);
 
@@ -82,7 +87,7 @@ io.on("connection", (socket) => {
   });
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`CallGuard signaling server running on port ${PORT}`);
 });

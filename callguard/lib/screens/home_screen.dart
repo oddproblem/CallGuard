@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../utils/id_generator.dart';
 import '../services/signaling_service.dart';
-import '../services/webrtc_service.dart';
 import 'call_screen.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -36,7 +35,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _initUser() async {
     final id = await getUserId();
-    setState(() => _userId = id);
+    if (mounted) {
+      setState(() => _userId = id);
+    }
     _connectToServer(id);
   }
 
@@ -129,7 +130,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  void _makeCall() {
+  Future<void> _makeCall() async {
     final targetId = _targetIdController.text.trim();
     if (targetId.isEmpty || targetId.length != 6) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -149,6 +150,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       );
       return;
     }
+
+    // Request microphone permission before starting the call
+    try {
+      final stream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
+      // Permission granted — dispose the test stream immediately
+      stream.getTracks().forEach((track) => track.stop());
+      await stream.dispose();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Microphone permission is required for calls'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      return;
+    }
+
+    if (!mounted) return;
 
     Navigator.push(
       context,
