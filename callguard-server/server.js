@@ -1,8 +1,19 @@
 const express = require("express");
 const http = require("http");
+const fs = require("fs");
 const { Server } = require("socket.io");
 const admin = require("firebase-admin");
-const serviceAccount = require("./serviceAccountKey.json");
+
+// Load service account: prefer local file (dev), fall back to env var (production)
+let serviceAccount;
+if (fs.existsSync("./serviceAccountKey.json")) {
+  serviceAccount = require("./serviceAccountKey.json");
+} else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+} else {
+  console.error("ERROR: No Firebase service account found. Set FIREBASE_SERVICE_ACCOUNT env var.");
+  process.exit(1);
+}
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
