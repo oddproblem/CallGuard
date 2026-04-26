@@ -7,6 +7,7 @@ import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:uuid/uuid.dart';
 import '../config/constants.dart';
 import '../config/theme.dart';
+import '../services/foreground_service.dart';
 import '../services/permission_service.dart';
 import '../services/push_notification_service.dart';
 import '../services/ringtone_service.dart';
@@ -55,6 +56,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _idRevealController.forward();
     }
     await _pushService.initialize();
+
+    // Request battery optimization exemption & start background keep-alive
+    await ForegroundService.requestPermissions();
+    ForegroundService.init();
+    await ForegroundService.start();
+
     _connectSignaling(id);
     _listenCallkitEvents();
   }
