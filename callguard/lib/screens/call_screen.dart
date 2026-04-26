@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../config/constants.dart';
 import '../config/theme.dart';
@@ -187,6 +188,8 @@ class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
   void _onConnected() {
     _ringtone.stop();
     _ringTimeout?.cancel();
+    // Dismiss the native callkit incoming notification
+    FlutterCallkitIncoming.endAllCalls();
     if (mounted && !_callEnded) {
       HapticFeedback.mediumImpact();
       _setStatus(CallStatus.connected);
@@ -221,6 +224,8 @@ class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
     _callTimer?.cancel();
     _ringTimeout?.cancel();
     HapticFeedback.mediumImpact();
+    // Dismiss any lingering callkit notification
+    FlutterCallkitIncoming.endAllCalls();
     try {
       widget.signaling.endCall({'to': widget.remoteId});
       await _webrtc.dispose();

@@ -1,6 +1,12 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
+const admin = require("firebase-admin");
+const serviceAccount = require("./serviceAccountKey.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
 
 const app = express();
 const server = http.createServer(app);
@@ -13,6 +19,13 @@ const io = new Server(server, {
 
 // Map CallGuard IDs → socket IDs
 const users = {};
+
+// Map CallGuard IDs → FCM Tokens
+const fcmTokens = {};
+
+// Pending call offers: callerId → { target, from, offer, timestamp }
+// Stored so the callee can retrieve the offer after waking up from push
+const pendingCalls = {};
 
 // Health check endpoint
 app.get("/", (req, res) => {
@@ -49,6 +62,23 @@ app.get("/turn-credentials", (req, res) => {
   });
 });
 
+// Endpoint for callee to retrieve a pending call offer after waking from push
+app.get("/pending-call/:userId", (req, res) => {
+  const userId = req.params.userId;
+  const pending = pendingCalls[userId];
+  if (pending) {
+    // Check if the pending call is still fresh (< 60 seconds old)
+    if (Date.now() - pending.timestamp < 60000) {
+      res.json({ success: true, call: { from: pending.from, offer: pending.offer } });
+    } else {
+      delete pendingCalls[userId];
+      res.json({ success: false, reason: "expired" });
+    }
+  } else {
+    res.json({ success: false, reason: "not_found" });
+  }
+});
+
 io.on("connection", (socket) => {
   console.log(`[+] Socket connected: ${socket.id}`);
 
@@ -58,6 +88,12 @@ io.on("connection", (socket) => {
     console.log(`[REGISTER] ${id} → ${socket.id} (${Object.keys(users).length} online)`);
   });
 
+  // Register push token
+  socket.on("register-fcm-token", (data) => {
+    fcmTokens[data.userId] = data.token;
+    console.log(`[FCM REGISTER] ${data.userId} → token received`);
+  });
+
   // Caller sends an offer to a target user
   socket.on("call-user", (data) => {
     const target = users[data.target];
@@ -65,14 +101,52 @@ io.on("connection", (socket) => {
       console.log(`[CALL] ${data.from} → ${data.target}`);
       io.to(target).emit("incoming-call", data);
     } else {
-      console.log(`[CALL] Target ${data.target} not found — offline`);
-      socket.emit("user-offline", { target: data.target });
+      console.log(`[CALL] Target ${data.target} not found via socket.`);
+      const fcmToken = fcmTokens[data.target];
+      if (fcmToken) {
+        console.log(`[CALL] Target ${data.target} is offline but has FCM token. Sending push notification...`);
+
+        // Store the pending call so callee can fetch the full offer later
+        pendingCalls[data.target] = {
+          from: data.from,
+          offer: data.offer,
+          timestamp: Date.now(),
+        };
+
+        // Send DATA-ONLY message (no 'notification' key) so that the
+        // background handler is invoked and we can show callkit incoming.
+        // Including the offer in the data payload so the callee has it.
+        const message = {
+          token: fcmToken,
+          data: {
+            type: "incoming_call",
+            from: data.from,
+            offer: JSON.stringify(data.offer),
+          },
+          android: {
+            priority: "high",
+            ttl: 60000,
+          },
+        };
+        admin.messaging().send(message)
+          .then((response) => {
+            console.log(`[FCM] Successfully sent data message:`, response);
+          })
+          .catch((error) => {
+            console.log(`[FCM] Error sending message:`, error);
+          });
+      } else {
+        console.log(`[CALL] Target ${data.target} is offline without an FCM token`);
+        socket.emit("user-offline", { target: data.target });
+      }
     }
   });
 
   // Callee answers the call
   socket.on("answer-call", (data) => {
     const caller = users[data.to];
+    // Clean up pending call
+    delete pendingCalls[data.to];
     if (caller) {
       console.log(`[ANSWER] → ${data.to}`);
       io.to(caller).emit("call-answered", data);
@@ -92,6 +166,8 @@ io.on("connection", (socket) => {
   // Call rejected
   socket.on("reject-call", (data) => {
     const target = users[data.to];
+    // Clean up pending call
+    delete pendingCalls[data.to];
     if (target) {
       console.log(`[REJECT] → ${data.to}`);
       io.to(target).emit("call-rejected", { from: data.to });

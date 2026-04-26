@@ -1,14 +1,19 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:flutter_callkit_incoming/entities/entities.dart';
+import 'package:uuid/uuid.dart';
 import '../config/constants.dart';
 import '../config/theme.dart';
 import '../services/permission_service.dart';
+import '../services/push_notification_service.dart';
 import '../services/ringtone_service.dart';
 import '../services/signaling_service.dart';
 import '../services/user_service.dart';
 import '../widgets/dial_pad.dart';
 import '../widgets/id_card.dart';
-import '../widgets/incoming_call_dialog.dart';
 import 'call_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -23,10 +28,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final TextEditingController _dialController = TextEditingController();
   final SignalingService _signaling = SignalingService();
   final RingtoneService _ringtone = RingtoneService();
+  final PushNotificationService _pushService = PushNotificationService();
   bool _isConnected = false;
 
   late AnimationController _pulseController;
   late AnimationController _idRevealController;
+
+  StreamSubscription? _callkitSubscription;
 
   @override
   void initState() {
@@ -46,14 +54,85 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       setState(() => _userId = id);
       _idRevealController.forward();
     }
+    await _pushService.initialize();
     _connectSignaling(id);
+    _listenCallkitEvents();
+  }
+
+  /// Listen for callkit accept/decline events.
+  /// When the user accepts a call from the native callkit UI,
+  /// we navigate to the call screen.
+  void _listenCallkitEvents() {
+    _callkitSubscription = FlutterCallkitIncoming.onEvent.listen((CallEvent? event) {
+      if (event == null) return;
+
+      switch (event.event) {
+        case Event.actionCallAccept:
+          // User accepted the incoming call from native UI
+          final body = event.body as Map<dynamic, dynamic>?;
+          if (body != null) {
+            final extra = body['extra'] as Map<dynamic, dynamic>?;
+            if (extra != null) {
+              final callerId = extra['callerId'] as String? ?? 'Unknown';
+              final offerStr = extra['offer'] as String? ?? '';
+
+              // Parse the SDP offer
+              dynamic sdpOffer;
+              if (offerStr.isNotEmpty) {
+                try {
+                  sdpOffer = json.decode(offerStr);
+                } catch (_) {}
+              }
+
+              if (sdpOffer != null) {
+                _navigateToCall(callerId, isIncoming: true, sdpOffer: sdpOffer);
+              } else {
+                // If we don't have the offer (e.g. app was killed),
+                // just navigate and let the call screen handle reconnection
+                _navigateToCall(callerId, isIncoming: true, sdpOffer: sdpOffer);
+              }
+            }
+          }
+          break;
+
+        case Event.actionCallDecline:
+          // User declined the call from native UI
+          final body = event.body as Map<dynamic, dynamic>?;
+          if (body != null) {
+            final extra = body['extra'] as Map<dynamic, dynamic>?;
+            if (extra != null) {
+              final callerId = extra['callerId'] as String? ?? '';
+              if (callerId.isNotEmpty) {
+                _signaling.rejectCall({'to': callerId});
+              }
+            }
+          }
+          break;
+
+        case Event.actionCallTimeout:
+          debugPrint('[CALLKIT] Call timed out');
+          break;
+
+        default:
+          break;
+      }
+    });
   }
 
   void _connectSignaling(String userId) {
     _signaling.connect(AppConfig.serverUrl, userId);
 
-    _signaling.onConnected = () {
+    _signaling.onConnected = () async {
       if (mounted) setState(() => _isConnected = true);
+
+      final token = await _pushService.getToken();
+      if (token != null) {
+        _signaling.socket.emit('register-fcm-token', {'userId': userId, 'token': token});
+      }
+
+      _pushService.onTokenRefresh((newToken) {
+        _signaling.socket.emit('register-fcm-token', {'userId': userId, 'token': newToken});
+      });
     };
 
     _signaling.onDisconnected = () {
@@ -67,31 +146,49 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     };
   }
 
-  // ── Incoming call ──
+  // ── Incoming call via socket (user is online with app open) ──
   void _onIncomingCall(dynamic data) {
     final callerId = data['from'] ?? 'Unknown';
     final sdpOffer = data['offer'];
 
     HapticFeedback.heavyImpact();
-    _ringtone.playRingtone();
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => IncomingCallDialog(
-        callerId: callerId,
-        onReject: () {
-          _ringtone.stop();
-          Navigator.of(ctx).pop();
-          _signaling.rejectCall({'to': callerId});
-        },
-        onAccept: () {
-          _ringtone.stop();
-          Navigator.of(ctx).pop();
-          _navigateToCall(callerId, isIncoming: true, sdpOffer: sdpOffer);
-        },
+    // Show native callkit incoming screen instead of custom dialog
+    final callId = const Uuid().v4();
+    final params = CallKitParams(
+      id: callId,
+      nameCaller: 'CallGuard User',
+      handle: callerId,
+      appName: 'CallGuard',
+      type: 0,
+      textAccept: 'Accept',
+      textDecline: 'Decline',
+      duration: 45000,
+      extra: <String, dynamic>{
+        'callerId': callerId,
+        'offer': json.encode(sdpOffer),
+      },
+      missedCallNotification: const NotificationParams(
+        showNotification: true,
+        isShowCallback: true,
+        subtitle: 'Missed call',
+        callbackText: 'Call back',
+      ),
+      android: const AndroidParams(
+        isCustomNotification: true,
+        isShowLogo: false,
+        ringtonePath: 'system_ringtone_default',
+        backgroundColor: '#0A0A2E',
+        actionColor: '#6C63FF',
+        textColor: '#ffffff',
+        incomingCallNotificationChannelName: 'Incoming Call',
+        missedCallNotificationChannelName: 'Missed Call',
+        isShowCallID: true,
       ),
     );
+
+    FlutterCallkitIncoming.showCallkitIncoming(params);
+    // The callkit event listener (_listenCallkitEvents) will handle accept/decline
   }
 
   // ── Make outgoing call ──
@@ -149,6 +246,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _callkitSubscription?.cancel();
     _pulseController.dispose();
     _idRevealController.dispose();
     _dialController.dispose();

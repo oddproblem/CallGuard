@@ -1,0 +1,29 @@
+{
+    "project_info": {
+        "project_number": "558751234359",
+        "project_id": "voip-msg",
+        "storage_bucket": "voip-msg.firebasestorage.app"
+    },
+    "client": [
+        {
+            "client_info": {
+                "mobilesdk_app_id": "1:558751234359:android:a31af0f6a6c4462f4942b2",
+                "android_client_info": {
+                    "package_name": "com.example.callguard"
+                }
+            },
+            "oauth_client": [],
+            "api_key": [
+                {
+                    "current_key": "AIzaSyDHP3qzEzG8-8m-M-mc4lmuAcal1jpcuRM"
+                }
+            ],
+            "services": {
+                "appinvite_service": {
+                    "other_platform_oauth_client": []
+                }
+            }
+        }
+    ],
+    "configuration_version": "1"
+}

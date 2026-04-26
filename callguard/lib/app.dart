@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'config/theme.dart';
+import 'main.dart';
 import 'screens/home_screen.dart';
 
 /// Root application widget.
@@ -12,6 +13,7 @@ class CallGuardApp extends StatelessWidget {
       title: 'CallGuard',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
+      navigatorKey: navigatorKey,
       home: const HomeScreen(),
     );
   }
