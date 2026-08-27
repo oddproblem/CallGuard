@@ -5,7 +5,9 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../config/constants.dart';
 import '../config/theme.dart';
+import '../models/call_history_entry.dart';
 import '../models/call_state.dart';
+import '../services/database_service.dart';
 import '../services/ringtone_service.dart';
 import '../services/signaling_service.dart';
 import '../services/webrtc_service.dart';
@@ -37,6 +39,7 @@ class CallScreen extends StatefulWidget {
 class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
   final WebRTCService _webrtc = WebRTCService();
   final RingtoneService _ringtone = RingtoneService();
+  final DatabaseService _db = DatabaseService();
 
   CallStatus _status = CallStatus.connecting;
   bool _isMuted = false;
@@ -45,6 +48,8 @@ class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
   Timer? _callTimer;
   Timer? _ringTimeout;
   int _seconds = 0;
+  DateTime? _callStartTime;
+  bool _historyLogged = false;
 
   late AnimationController _pulseController;
 
@@ -122,7 +127,7 @@ class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
     };
 
     // Call waiting: incoming call while on this call
-    widget.signaling.onIncomingCall = (data) => _onCallWaiting(data);
+    widget.signaling.onCallWaiting = (data) => _onCallWaiting(data);
 
     try {
       if (widget.isIncoming) {
@@ -193,6 +198,7 @@ class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
     if (mounted && !_callEnded) {
       HapticFeedback.mediumImpact();
       _setStatus(CallStatus.connected);
+      _callStartTime = DateTime.now();
       _pulseController.stop();
       _pulseController.value = 0;
       _callTimer?.cancel();
@@ -209,6 +215,7 @@ class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
     _ringTimeout?.cancel();
     _callTimer?.cancel();
     HapticFeedback.heavyImpact();
+    _logCallHistory(reason.name);
     if (mounted) {
       _setStatus(reason);
       Future.delayed(const Duration(seconds: 2), () {
@@ -224,6 +231,7 @@ class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
     _callTimer?.cancel();
     _ringTimeout?.cancel();
     HapticFeedback.mediumImpact();
+    _logCallHistory(reason?.name ?? 'ended');
     // Dismiss any lingering callkit notification
     FlutterCallkitIncoming.endAllCalls();
     try {
@@ -235,6 +243,21 @@ class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
       await Future.delayed(const Duration(seconds: 1));
     }
     if (mounted && Navigator.canPop(context)) Navigator.pop(context);
+  }
+
+  /// Save a call history entry to the local database.
+  void _logCallHistory(String status) {
+    if (_historyLogged) return;
+    _historyLogged = true;
+    final now = DateTime.now();
+    _db.insertCallHistory(CallHistoryEntry(
+      remoteId: widget.remoteId,
+      isIncoming: widget.isIncoming,
+      startTime: _callStartTime ?? now,
+      endTime: now,
+      durationSeconds: _seconds,
+      status: status,
+    ));
   }
 
   // ── Call waiting ──
@@ -304,6 +327,15 @@ class _CallScreenState extends State<CallScreen> with TickerProviderStateMixin {
     _pulseController.dispose();
     _ringtone.stop();
     _webrtc.dispose();
+    
+    // Clear callbacks so they don't fire after this screen is destroyed
+    widget.signaling.onCallWaiting = null;
+    widget.signaling.onCallEnded = null;
+    widget.signaling.onCallAnswered = null;
+    widget.signaling.onCallRejected = null;
+    widget.signaling.onIceCandidate = null;
+    widget.signaling.onUserOffline = null;
+    
     super.dispose();
   }
 

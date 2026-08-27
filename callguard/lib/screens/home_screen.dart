@@ -16,6 +16,9 @@ import '../services/user_service.dart';
 import '../widgets/dial_pad.dart';
 import '../widgets/id_card.dart';
 import 'call_screen.dart';
+import 'fraud_analysis_screen.dart';
+import 'call_history_screen.dart';
+import 'classification_history_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -36,6 +39,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _idRevealController;
 
   StreamSubscription? _callkitSubscription;
+
+  int _currentTab = 0;
 
   @override
   void initState() {
@@ -264,82 +269,123 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppGradients.backgroundSubtle),
-        child: SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Column(
-              children: [
-                const SizedBox(height: 12),
+      body: IndexedStack(
+        index: _currentTab,
+        children: [
+          // Tab 0: Calls (original home content)
+          _buildCallsTab(),
+          // Tab 1: Shield (fraud analysis)
+          const FraudAnalysisScreen(),
+          // Tab 2: History (call history)
+          const CallHistoryScreen(),
+          // Tab 3: Scans (classification history)
+          const ClassificationHistoryScreen(),
+        ],
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          border: Border(top: BorderSide(color: AppColors.border, width: 0.5)),
+        ),
+        child: BottomNavigationBar(
+          currentIndex: _currentTab,
+          onTap: (i) => setState(() => _currentTab = i),
+          type: BottomNavigationBarType.fixed,
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          selectedItemColor: AppColors.accent,
+          unselectedItemColor: AppColors.textMuted,
+          selectedFontSize: 11,
+          unselectedFontSize: 11,
+          items: const [
+            BottomNavigationBarItem(icon: Icon(Icons.call_rounded), label: 'Calls'),
+            BottomNavigationBarItem(icon: Icon(Icons.shield_rounded), label: 'Shield'),
+            BottomNavigationBarItem(icon: Icon(Icons.history_rounded), label: 'History'),
+            BottomNavigationBarItem(icon: Icon(Icons.document_scanner_rounded), label: 'Scans'),
+          ],
+        ),
+      ),
+    );
+  }
 
-                // ── Logo ──
-                AnimatedBuilder(
-                  animation: _pulseController,
-                  builder: (context, child) {
-                    return ShaderMask(
-                      shaderCallback: (bounds) => LinearGradient(
-                        colors: [
-                          Color.lerp(AppColors.accent, AppColors.purple, _pulseController.value)!,
-                          Color.lerp(AppColors.purple, AppColors.accent, _pulseController.value)!,
-                        ],
-                      ).createShader(bounds),
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.shield_rounded, color: Colors.white, size: 30),
-                          SizedBox(width: 10),
-                          Text('CallGuard', style: AppTextStyles.heading),
-                        ],
+  /// The original home screen content — ID card + dial pad.
+  /// Extracted into its own widget method, code is identical to the original.
+  Widget _buildCallsTab() {
+    return Container(
+      decoration: const BoxDecoration(gradient: AppGradients.backgroundSubtle),
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          child: Column(
+            children: [
+              const SizedBox(height: 12),
+
+              // ── Logo ──
+              AnimatedBuilder(
+                animation: _pulseController,
+                builder: (context, child) {
+                  return ShaderMask(
+                    shaderCallback: (bounds) => LinearGradient(
+                      colors: [
+                        Color.lerp(AppColors.accent, AppColors.accentDark, _pulseController.value)!,
+                        Color.lerp(AppColors.accentDark, AppColors.accent, _pulseController.value)!,
+                      ],
+                    ).createShader(bounds),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.shield_rounded, color: Colors.white, size: 30),
+                        SizedBox(width: 10),
+                        Text('CallGuard', style: AppTextStyles.heading),
+                      ],
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 4),
+              Text('Secure VoIP Calling', style: AppTextStyles.caption),
+
+              const SizedBox(height: 36),
+
+              // ── ID Card ──
+              IdCard(
+                userId: _userId,
+                isConnected: _isConnected,
+                revealAnimation: _idRevealController,
+                onCopied: () => _showSnack('ID copied!', AppColors.accent),
+              ),
+
+              const SizedBox(height: 28),
+
+              // ── Dial Pad ──
+              DialPad(
+                controller: _dialController,
+                onCall: _makeCall,
+              ),
+
+              const SizedBox(height: 32),
+
+              // ── Help tip ──
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.02),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline_rounded, color: AppColors.textMuted, size: 16),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Tap your ID to copy it. Share it with others to receive calls.',
+                        style: TextStyle(color: AppColors.textMuted, fontSize: 12, height: 1.4),
                       ),
-                    );
-                  },
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Text('Secure VoIP Calling', style: AppTextStyles.caption),
-
-                const SizedBox(height: 36),
-
-                // ── ID Card ──
-                IdCard(
-                  userId: _userId,
-                  isConnected: _isConnected,
-                  revealAnimation: _idRevealController,
-                  onCopied: () => _showSnack('ID copied!', AppColors.accent),
-                ),
-
-                const SizedBox(height: 28),
-
-                // ── Dial Pad ──
-                DialPad(
-                  controller: _dialController,
-                  onCall: _makeCall,
-                ),
-
-                const SizedBox(height: 32),
-
-                // ── Help tip ──
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.02),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.info_outline_rounded, color: AppColors.textMuted, size: 16),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Tap your ID to copy it. Share it with others to receive calls.',
-                          style: TextStyle(color: AppColors.textMuted, fontSize: 12, height: 1.4),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),

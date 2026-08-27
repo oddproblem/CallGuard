@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
-import '../config/constants.dart';
 
 /// Manages all call-related audio feedback.
 class RingtoneService {
@@ -24,24 +23,33 @@ class RingtoneService {
     );
   }
 
-  /// Play short notification beeps at intervals (outgoing "ringback").
+  /// Play classic telephony ringback — "trrr... trrr..." pattern.
+  /// Rings for 2s, silent for 3s, repeats. This is what real phone
+  /// networks do for the caller while the other side is ringing.
   void playRingback() {
     if (_isPlaying) return;
     _isPlaying = true;
-    _playBeep();
-    _ringbackTimer = Timer.periodic(
-      Duration(seconds: AppConfig.ringbackIntervalSeconds),
-      (_) => _playBeep(),
-    );
+    _startRingCycle();
   }
 
-  void _playBeep() {
+  void _startRingCycle() {
+    // Play the ring tone
     _player.play(
-      android: AndroidSounds.notification,
-      ios: IosSounds.glass,
+      android: AndroidSounds.ringtone,
+      ios: IosSounds.electronic,
       looping: false,
-      volume: 0.3,
+      volume: 0.6,
     );
+
+    // Stop after 2 seconds, then wait 3 seconds before next ring
+    _ringbackTimer = Timer(const Duration(seconds: 2), () {
+      _player.stop();
+      if (_isPlaying) {
+        _ringbackTimer = Timer(const Duration(seconds: 3), () {
+          if (_isPlaying) _startRingCycle();
+        });
+      }
+    });
   }
 
   /// Stop all audio.

@@ -12,6 +12,7 @@ class SignalingService {
 
   // ── Event callbacks ──
   Function(dynamic)? onIncomingCall;
+  Function(dynamic)? onCallWaiting;
   Function(dynamic)? onCallAnswered;
   Function(dynamic)? onIceCandidate;
   Function(dynamic)? onCallRejected;
@@ -29,7 +30,6 @@ class SignalingService {
           .disableAutoConnect()
           .enableReconnection()
           .setReconnectionDelay(1000)
-          .setReconnectionAttempts(10)
           .build(),
     );
 
@@ -41,7 +41,13 @@ class SignalingService {
       onConnected?.call();
     });
 
-    socket.on('incoming-call', (data) => onIncomingCall?.call(data));
+    socket.on('incoming-call', (data) {
+      if (onCallWaiting != null) {
+        onCallWaiting!(data);
+      } else {
+        onIncomingCall?.call(data);
+      }
+    });
     socket.on('call-answered', (data) => onCallAnswered?.call(data));
     socket.on('ice-candidate', (data) => onIceCandidate?.call(data));
     socket.on('call-rejected', (data) => onCallRejected?.call(data));

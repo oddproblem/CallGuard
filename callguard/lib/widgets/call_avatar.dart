@@ -34,7 +34,7 @@ class CallAvatar extends StatelessWidget {
                 end: Alignment.bottomRight,
                 colors: status.isTerminal
                     ? [Colors.red.shade400, Colors.red.shade900]
-                    : [AppColors.accent, AppColors.purple],
+                    : [AppColors.accent, AppColors.accentDark],
               ),
               boxShadow: [
                 BoxShadow(

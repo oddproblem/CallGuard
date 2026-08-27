@@ -38,6 +38,12 @@ const fcmTokens = {};
 // Stored so the callee can retrieve the offer after waking up from push
 const pendingCalls = {};
 
+// Queue for ICE candidates sent to offline users
+const pendingIceCandidates = {};
+
+// Map socket IDs back to CallGuard IDs
+const socketToUser = {};
+
 // Health check endpoint
 app.get("/", (req, res) => {
   res.json({ status: "ok", users: Object.keys(users).length });
@@ -96,6 +102,7 @@ io.on("connection", (socket) => {
   // Register a user with their CallGuard ID
   socket.on("register", (id) => {
     users[id] = socket.id;
+    socketToUser[socket.id] = id;
     console.log(`[REGISTER] ${id} → ${socket.id} (${Object.keys(users).length} online)`);
   });
 
@@ -156,8 +163,22 @@ io.on("connection", (socket) => {
   // Callee answers the call
   socket.on("answer-call", (data) => {
     const caller = users[data.to];
-    // Clean up pending call
-    delete pendingCalls[data.to];
+    const calleeId = socketToUser[socket.id];
+    
+    if (calleeId) {
+      // Clean up pending call
+      delete pendingCalls[calleeId];
+      
+      // Flush queued ICE candidates back to the callee
+      if (pendingIceCandidates[calleeId]) {
+        console.log(`[ICE] Flushing ${pendingIceCandidates[calleeId].length} queued candidates to ${calleeId}`);
+        pendingIceCandidates[calleeId].forEach(candidate => {
+          socket.emit("ice-candidate", { candidate: candidate });
+        });
+        delete pendingIceCandidates[calleeId];
+      }
+    }
+    
     if (caller) {
       console.log(`[ANSWER] → ${data.to}`);
       io.to(caller).emit("call-answered", data);
@@ -171,14 +192,27 @@ io.on("connection", (socket) => {
       io.to(target).emit("ice-candidate", {
         candidate: data.candidate,
       });
+    } else {
+      // Target is offline, queue the ICE candidate
+      if (!pendingIceCandidates[data.to]) {
+        pendingIceCandidates[data.to] = [];
+      }
+      pendingIceCandidates[data.to].push(data.candidate);
+      console.log(`[ICE] Queued candidate for offline user ${data.to}`);
     }
   });
 
   // Call rejected
   socket.on("reject-call", (data) => {
     const target = users[data.to];
-    // Clean up pending call
-    delete pendingCalls[data.to];
+    const calleeId = socketToUser[socket.id];
+    
+    if (calleeId) {
+      // Clean up pending call and candidates
+      delete pendingCalls[calleeId];
+      delete pendingIceCandidates[calleeId];
+    }
+    
     if (target) {
       console.log(`[REJECT] → ${data.to}`);
       io.to(target).emit("call-rejected", { from: data.to });
@@ -196,12 +230,11 @@ io.on("connection", (socket) => {
 
   // Cleanup on disconnect
   socket.on("disconnect", () => {
-    for (const [id, sid] of Object.entries(users)) {
-      if (sid === socket.id) {
-        delete users[id];
-        console.log(`[-] ${id} disconnected (${Object.keys(users).length} online)`);
-        break;
-      }
+    const id = socketToUser[socket.id];
+    if (id) {
+      delete users[id];
+      delete socketToUser[socket.id];
+      console.log(`[-] ${id} disconnected (${Object.keys(users).length} online)`);
     }
   });
 });
